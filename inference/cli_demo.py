@@ -12,6 +12,8 @@ Run the script:
 
 import argparse
 import torch
+import csv
+import os
 from diffusers import CogVideoXPipeline, CogVideoXDDIMScheduler, CogVideoXDPMScheduler
 from diffusers.utils import export_to_video
 
@@ -76,10 +78,31 @@ def generate_video(
     # 5. Export the generated frames to a video file. fps must be 8 for original video.
     export_to_video(video, output_path, fps=8)
 
+def process_csv(csv_file: str, model_path: str, num_inference_steps: int, guidance_scale: float, num_videos_per_prompt: int, dtype: torch.dtype):
+    with open(csv_file, 'r') as file:
+        csv_reader = csv.DictReader(file)
+        for row in csv_reader:
+            prompt = row['prompt']
+            output_path = row['output_path']
+            if os.path.exists(output_path):
+                print(f"Video already exists at {output_path}. Skipping generation.")
+                continue
+            print(f"Generating video for prompt: {prompt}")
+            generate_video(
+                prompt=prompt,
+                model_path=model_path,
+                output_path=output_path,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                num_videos_per_prompt=num_videos_per_prompt,
+                dtype=dtype,
+            )
+            print(f"Video saved to: {output_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate a video from a text prompt using CogVideoX")
-    parser.add_argument("--prompt", type=str, required=True, help="The description of the video to be generated")
+    parser = argparse.ArgumentParser(description="Generate videos from text prompts using CogVideoX")
+    parser.add_argument("--prompt", type=str, help="The description of the video to be generated")
+    parser.add_argument("--prompts", type=str, help="Path to a CSV file containing prompts and output paths")
     parser.add_argument(
         "--model_path", type=str, default="THUDM/CogVideoX-5b", help="The path of the pre-trained model to be used"
     )
@@ -97,18 +120,30 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Convert dtype argument to torch.dtype.
-    # For CogVideoX-2B model, use torch.float16.
-    # For CogVideoX-5B model, use torch.bfloat16.
+    # Convert dtype argument to torch.dtype
     dtype = torch.float16 if args.dtype == "float16" else torch.bfloat16
 
-    # main function to generate video.
-    generate_video(
-        prompt=args.prompt,
-        model_path=args.model_path,
-        output_path=args.output_path,
-        num_inference_steps=args.num_inference_steps,
-        guidance_scale=args.guidance_scale,
-        num_videos_per_prompt=args.num_videos_per_prompt,
-        dtype=dtype,
-    )
+    if args.prompts:
+        # Process the CSV file
+        process_csv(
+            csv_file=args.prompts,
+            model_path=args.model_path,
+            num_inference_steps=args.num_inference_steps,
+            guidance_scale=args.guidance_scale,
+            num_videos_per_prompt=args.num_videos_per_prompt,
+            dtype=dtype,
+        )
+    elif args.prompt:
+        # Generate a single video
+        generate_video(
+            prompt=args.prompt,
+            model_path=args.model_path,
+            output_path=args.output_path,
+            num_inference_steps=args.num_inference_steps,
+            guidance_scale=args.guidance_scale,
+            num_videos_per_prompt=args.num_videos_per_prompt,
+            dtype=dtype,
+        )
+    else:
+        print("Error: Either --prompt or --prompts must be provided.")
+        parser.print_help()
