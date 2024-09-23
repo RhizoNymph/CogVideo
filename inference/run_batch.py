@@ -8,6 +8,8 @@ import csv
 import argparse
 import logging
 import io
+import subprocess
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logging.basicConfig(level=logging.INFO)
 
@@ -16,11 +18,36 @@ class PromptBatch(BaseModel):
     csv: str
 
 def parse_csv(csv_string):
-    # Use StringIO to create a file-like object from the string
-    csv_file = io.StringIO(csv_string)
-    # Use csv.reader with strict quoting to handle commas within fields
-    reader = csv.reader(csv_file, strict=True, quoting=csv.QUOTE_ALL)
-    return list(reader)
+    try:
+        # Use StringIO to create a file-like object from the string
+        csv_file = io.StringIO(csv_string)
+        # Use csv.reader with strict quoting to handle commas within fields
+        reader = csv.reader(csv_file, quoting=csv.QUOTE_ALL)
+        return list(reader)
+    except Exception as e:
+        logging.error(f"Error parsing CSV: {str(e)}")
+        return []
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def generate_prompts(client, model, args):
+    return client.chat.completions.create(
+        model=model,
+        response_model=PromptBatch,
+        max_tokens=2048,
+        messages=[
+            {
+                "role": "user",
+                "content": f"""Generate a CSV with exactly {args.num_prompts} rows, plus a header row. The format should be:
+
+prompt,output_path
+"Detailed prompt 1",output1.mp4
+"Detailed prompt 2",output2.mp4
+...
+
+Each prompt should be for a video generation model based on the theme '{args.theme}'. Be creative and diverse in the prompts. Ensure there are exactly {args.num_prompts} rows after the header row. Please be very descriptive and try not to leave many details out of the scenes from the prompts."""
+            }
+        ]
+    )
 
 def main():
     # Parse command-line arguments
@@ -35,33 +62,21 @@ def main():
 
     # Create client based on provider
     logging.info("Creating client")
-    if args.provider == "anthropic":
-        client = instructor.from_anthropic(Anthropic())
-        model = "claude-3-opus-20240229"
-    else:
-        client = instructor.from_openai(OpenAI())
-        model = "gpt-4"
+    try:
+        if args.provider == "anthropic":
+            client = instructor.from_anthropic(Anthropic())
+            model = "claude-3-5-sonnet-20240620"
+        else:
+            client = instructor.from_openai(OpenAI())
+            model = "gpt-4o"
+    except Exception as e:
+        logging.error(f"Failed to create client: {str(e)}")
+        sys.exit(1)
 
     # Generate prompts
     logging.info("Sending message to generate prompts")
     try:
-        message = client.chat.completions.create(
-            model=model,
-            response_model=PromptBatch,
-            max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"""Generate a CSV with exactly {args.num_prompts} rows of content (no header row needed). The format should be:
-
-"Detailed prompt 1",output1.mp4
-"Detailed prompt 2",output2.mp4
-...
-
-Each prompt should be for a video generation model based on the theme '{args.theme}'. Be creative and diverse in the prompts. Ensure there are exactly {args.num_prompts} rows. Make sure to enclose each prompt in double quotes to handle any commas within the prompt text."""
-                }
-            ]
-        )
+        message = generate_prompts(client, model, args)
     except Exception as e:
         logging.error(f"Failed to reach the model: {str(e)}")
         sys.exit(1)
@@ -98,11 +113,9 @@ Each prompt should be for a video generation model based on the theme '{args.the
 
     # Create batch directory
     logging.info("Creating batch directory")
-    batches = os.listdir("./batches")
-    batches = [i.replace("batch", "") for i in batches]
-    batches = [int(i.split("-")[0]) for i in batches if i.split("-")[0].isdigit()]
-    max_n = max(batches) if batches else 0
-    current_n = max_n + 1
+    batches = [d for d in os.listdir("./batches") if os.path.isdir(os.path.join("./batches", d))]
+    batch_numbers = [int(d.split("-")[0].replace("batch", "")) for d in batches if d.startswith("batch") and d.split("-")[0].replace("batch", "").isdigit()]
+    current_n = max(batch_numbers, default=0) + 1
     sanitized_theme = args.theme.replace(" ", "_")
     out_dir = f"./batches/batch{current_n}-{sanitized_theme}"
     os.makedirs(out_dir, exist_ok=True)
@@ -122,7 +135,11 @@ Each prompt should be for a video generation model based on the theme '{args.the
     # Run the generation script
     logging.info("Running generation script")
     logging.info(f"CSV path: {csv_path}")
-    os.system(f"python3 cli_demo.py --prompts {csv_path}")
+    try:
+        subprocess.run(["python3", "cli_demo.py", "--prompts", csv_path], check=True)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Failed to run generation script: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
