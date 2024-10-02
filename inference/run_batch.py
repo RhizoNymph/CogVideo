@@ -54,11 +54,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("num_prompts", type=int, help="Number of prompts to generate")
     parser.add_argument("theme", help="Theme for the prompts")
+    parser.add_argument("style")
     parser.add_argument("--provider", choices=["anthropic", "openai"], default="anthropic", help="API provider (default: anthropic)")
     args = parser.parse_args()
 
     logging.info(f"Theme: {args.theme}")
     logging.info(f"Provider: {args.provider}")
+    logging.info(f"Style: {args.style}")
 
     # Create client based on provider
     logging.info("Creating client")
@@ -128,6 +130,7 @@ def main():
         writer.writerow(headers)
         for prompt, output_path in prompts:
             updated_output_path = os.path.join(out_dir, output_path)
+            updated_prompt = prompt + ' ' + args.style + ' style'
             writer.writerow([prompt, updated_output_path])
 
     logging.info("CSV file created successfully")
